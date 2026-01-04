@@ -92,6 +92,7 @@ export default function GamePage() {
               style={{ height: "min(70vh, 600px)" }}
             >
               <PlinkoBoard />
+              <ResultNotification />
             </div>
           </motion.div>
           
@@ -125,9 +126,6 @@ export default function GamePage() {
           </div>
         </div>
       </main>
-      
-      {/* Result notification */}
-      <ResultNotification />
       
       {/* Settings modal */}
       <SettingsModal

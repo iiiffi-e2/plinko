@@ -35,25 +35,11 @@ export function ResultNotification() {
     <AnimatePresence>
       {visible && (
         <motion.div
-          className="fixed inset-0 pointer-events-none flex items-center justify-center z-30"
+          className="absolute top-4 right-4 pointer-events-none z-30 max-w-sm"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
         >
-          {/* Background pulse for big wins */}
-          {isBigWin && !settings.reducedMotion && (
-            <motion.div
-              className={`
-                absolute inset-0
-                bg-gradient-radial from-transparent via-transparent
-                ${isHugeWin ? "to-yellow-500/10" : "to-primary-500/10"}
-              `}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: [0, 1, 0] }}
-              transition={{ duration: 1.5 }}
-            />
-          )}
-          
           {/* Result card */}
           <motion.div
             className={`
@@ -62,9 +48,9 @@ export function ResultNotification() {
               shadow-soft-lg border border-surface-200 dark:border-surface-700
               text-center
             `}
-            initial={{ scale: 0.5, y: 50, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.8, y: -20, opacity: 0 }}
+            initial={{ scale: 0.5, x: 50, y: -50, opacity: 0 }}
+            animate={{ scale: 1, x: 0, y: 0, opacity: 1 }}
+            exit={{ scale: 0.8, x: 20, y: -20, opacity: 0 }}
             transition={{ type: "spring", stiffness: 400, damping: 25 }}
           >
             {/* Multiplier */}
@@ -129,6 +115,21 @@ export function ResultNotification() {
                 </span>
               )}
             </motion.div>
+            
+            {/* Background pulse for big wins - centered on card */}
+            {isBigWin && !settings.reducedMotion && (
+              <motion.div
+                className={`
+                  absolute inset-0 rounded-2xl
+                  bg-gradient-radial from-transparent via-transparent
+                  ${isHugeWin ? "to-yellow-500/10" : "to-primary-500/10"}
+                  pointer-events-none
+                `}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: [0, 1, 0] }}
+                transition={{ duration: 1.5 }}
+              />
+            )}
           </motion.div>
           
           {/* Confetti for huge wins */}
@@ -181,14 +182,14 @@ function Confetti() {
   }));
   
   return (
-    <div className="absolute inset-0 overflow-hidden pointer-events-none">
+    <div className="fixed inset-0 overflow-hidden pointer-events-none z-20">
       {particles.map((particle) => (
         <motion.div
           key={particle.id}
           className="absolute w-3 h-3"
           style={{
-            left: "50%",
-            top: "50%",
+            left: "calc(100% - 200px)",
+            top: "80px",
             backgroundColor: particle.color,
             borderRadius: Math.random() > 0.5 ? "50%" : "0",
           }}

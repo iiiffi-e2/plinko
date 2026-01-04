@@ -26,6 +26,8 @@ interface ChipData {
   targetSlot?: number;
   hasLanded: boolean;
   createdAt: number;
+  lastPosition?: { x: number; y: number };
+  stuckCheckTime?: number;
 }
 
 // Physics constants
@@ -145,7 +147,8 @@ export class PlinkoEngine {
     // Calculate sizes based on dimensions and row count
     const minDimension = Math.min(this.width, this.height);
     this.pegRadius = Math.max(3, minDimension / (this.rows * 4));
-    this.chipRadius = this.pegRadius * 1.5;
+    // Reduce chip size to prevent getting stuck - chips should be smaller than pegs or same size
+    this.chipRadius = this.pegRadius * 0.9; // Chips are now 90% of peg size
     
     this.boardPadding = this.width * 0.08;
     const usableWidth = this.width - this.boardPadding * 2;
@@ -211,30 +214,51 @@ export class PlinkoEngine {
   private createWalls(): void {
     const wallThickness = 20;
     
-    // Left wall (angled)
+    // Left wall - positioned to catch any balls that go off the left side
+    // Extend well above the board to catch balls at the top
     const leftWall = Bodies.rectangle(
       -wallThickness / 2,
       this.height / 2,
       wallThickness,
-      this.height * 2,
+      this.height * 2.5, // Taller to catch balls at top
       {
         isStatic: true,
         restitution: PHYSICS.wallRestitution,
+        friction: 0.1,
         label: "wall",
         render: { fillStyle: VISUAL.wallColor },
       }
     );
     
-    // Right wall (angled)
+    // Right wall - positioned to catch any balls that go off the right side
+    // Extend well above the board to catch balls at the top
     const rightWall = Bodies.rectangle(
       this.width + wallThickness / 2,
       this.height / 2,
       wallThickness,
-      this.height * 2,
+      this.height * 2.5, // Taller to catch balls at top
       {
         isStatic: true,
         restitution: PHYSICS.wallRestitution,
+        friction: 0.1,
         label: "wall",
+        render: { fillStyle: VISUAL.wallColor },
+      }
+    );
+    
+    // Top wall/guide - helps prevent balls from getting stuck at the top
+    // Positioned just above the drop zone to guide balls downward
+    const topWallY = this.chipRadius * 1.5;
+    const topWall = Bodies.rectangle(
+      this.width / 2,
+      -wallThickness / 2,
+      this.width * 1.5, // Wide enough to catch any stray balls
+      wallThickness,
+      {
+        isStatic: true,
+        restitution: 0.2, // Low restitution to prevent bouncing back up
+        friction: 0.1,
+        label: "topWall",
         render: { fillStyle: VISUAL.wallColor },
       }
     );
@@ -252,7 +276,7 @@ export class PlinkoEngine {
       }
     );
     
-    this.walls.push(leftWall, rightWall, bottomWall);
+    this.walls.push(leftWall, rightWall, topWall, bottomWall);
   }
   
   private createSlots(): void {
@@ -335,11 +359,79 @@ export class PlinkoEngine {
     const render = () => {
       if (this.isDestroyed) return;
       
+      // Check for stuck balls and unstick them
+      this.checkAndUnstickBalls();
+      
       this.customRender();
       this.animationFrame = requestAnimationFrame(render);
     };
     
     render();
+  }
+  
+  private checkAndUnstickBalls(): void {
+    const now = Date.now();
+    const stuckThreshold = 500; // 0.5 seconds - more aggressive
+    const minMovement = 1.5; // pixels - detect smaller movements
+    
+    this.chips.forEach((chipData, chipId) => {
+      if (chipData.hasLanded) return;
+      
+      const bodies = Composite.allBodies(this.engine.world);
+      const chip = bodies.find((b) => b.label === `chip-${chipId}`);
+      if (!chip) return;
+      
+      const currentPos = { x: chip.position.x, y: chip.position.y };
+      
+      if (!chipData.lastPosition) {
+        // First check - just record position
+        chipData.lastPosition = currentPos;
+        chipData.stuckCheckTime = now;
+        return;
+      }
+      
+      // Check if ball has moved significantly
+      const distance = Math.sqrt(
+        Math.pow(currentPos.x - chipData.lastPosition.x, 2) +
+        Math.pow(currentPos.y - chipData.lastPosition.y, 2)
+      );
+      
+      if (distance < minMovement) {
+        // Ball hasn't moved much
+        if (!chipData.stuckCheckTime) {
+          chipData.stuckCheckTime = now;
+        } else if (now - chipData.stuckCheckTime > stuckThreshold) {
+          // Ball has been stuck for too long - give it a nudge
+          const velocity = chip.velocity;
+          const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+          
+          if (speed < 0.2) {
+            // Ball is essentially stationary - apply a stronger force to unstick it
+            const angle = Math.random() * Math.PI * 2;
+            const force = 0.001; // Stronger force
+            Body.applyForce(chip, chip.position, {
+              x: Math.cos(angle) * force,
+              y: Math.sin(angle) * force + 0.0008, // Stronger downward bias
+            });
+            
+            // Also give it a velocity boost
+            const currentVel = chip.velocity;
+            Body.setVelocity(chip, {
+              x: currentVel.x + (Math.random() - 0.5) * 0.3,
+              y: currentVel.y + 0.5 + Math.random() * 0.5, // Strong downward push
+            });
+            
+            // Reset stuck check
+            chipData.stuckCheckTime = now;
+            chipData.lastPosition = currentPos;
+          }
+        }
+      } else {
+        // Ball is moving - reset stuck check
+        chipData.lastPosition = currentPos;
+        chipData.stuckCheckTime = undefined;
+      }
+    });
   }
   
   private customRender(): void {
@@ -459,20 +551,31 @@ export class PlinkoEngine {
     const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
     // Calculate drop position
+    // Ensure we have safe boundaries that account for chip radius
+    // Since chips are now smaller, we can use a smaller margin
+    const safeMargin = this.chipRadius + this.pegRadius + 10;
+    const minX = this.boardPadding + safeMargin;
+    const maxX = this.width - this.boardPadding - safeMargin;
+    
     let dropX: number;
     if (xPosition !== undefined) {
       // Use provided position (percentage 0-1)
-      const minX = this.boardPadding + this.pegSpacingX;
-      const maxX = this.width - this.boardPadding - this.pegSpacingX;
       dropX = minX + xPosition * (maxX - minX);
     } else {
       // Random position near center
       const centerX = this.width / 2;
-      const variance = this.pegSpacingX * 0.8;
+      const variance = Math.min(this.pegSpacingX * 0.8, (maxX - minX) * 0.3);
       dropX = centerX + (Math.random() - 0.5) * variance;
     }
     
-    const dropY = this.chipRadius * 2;
+    // Clamp dropX to safe boundaries
+    dropX = Math.max(minX, Math.min(maxX, dropX));
+    
+    // Drop position should be well above the first row of pegs
+    // First peg row starts at: this.pegSpacingY * 1.5
+    // We want to drop significantly above that to prevent getting stuck
+    const firstPegY = this.pegSpacingY * 1.5;
+    const dropY = Math.max(this.chipRadius * 1.5, firstPegY - this.chipRadius * 4);
     
     // Adjust physics for deterministic mode
     let restitution = PHYSICS.chipRestitution;
@@ -496,9 +599,7 @@ export class PlinkoEngine {
       const bias = (targetX - this.width / 2) * 0.15;
       dropX = this.width / 2 + bias + (Math.random() - 0.5) * this.pegSpacingX * 0.3;
       
-      // Clamp to valid range
-      const minX = this.boardPadding + this.pegSpacingX;
-      const maxX = this.width - this.boardPadding - this.pegSpacingX;
+      // Clamp to valid range (using the safe boundaries already calculated above)
       dropX = Math.max(minX, Math.min(maxX, dropX));
       
       // Slightly adjust physics to help reach target
@@ -517,10 +618,11 @@ export class PlinkoEngine {
       },
     });
     
-    // Add slight initial velocity variation
+    // Add initial velocity with stronger downward component
+    // This helps prevent balls from getting stuck at the top
     Body.setVelocity(chip, {
-      x: (Math.random() - 0.5) * 0.5,
-      y: 0,
+      x: (Math.random() - 0.5) * 0.8,
+      y: 1.0 + Math.random() * 1.0, // Stronger downward velocity to start falling immediately
     });
     
     // Store chip data
@@ -628,12 +730,15 @@ export class PlinkoEngine {
   }
   
   public getDropZone(): { x: number; y: number; width: number } {
-    const minX = this.boardPadding + this.pegSpacingX;
-    const maxX = this.width - this.boardPadding - this.pegSpacingX;
+    const safeMargin = this.chipRadius + this.pegRadius + 10;
+    const minX = this.boardPadding + safeMargin;
+    const maxX = this.width - this.boardPadding - safeMargin;
+    const firstPegY = this.pegSpacingY * 1.5;
+    const dropY = Math.max(this.chipRadius * 1.5, firstPegY - this.chipRadius * 4);
     
     return {
       x: minX,
-      y: this.chipRadius * 2,
+      y: dropY,
       width: maxX - minX,
     };
   }

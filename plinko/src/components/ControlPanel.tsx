@@ -41,6 +41,7 @@ export function ControlPanel() {
   const placeBet = useGameStore((state) => state.placeBet);
   const incrementActiveChips = useGameStore((state) => state.incrementActiveChips);
   const startBatchDrop = useGameStore((state) => state.startBatchDrop);
+  const startNewSession = useGameStore((state) => state.startNewSession);
   const updateBatchProgress = useGameStore((state) => state.updateBatchProgress);
   const endBatchDrop = useGameStore((state) => state.endBatchDrop);
   
@@ -49,6 +50,9 @@ export function ControlPanel() {
   
   const dropChip = useCallback(() => {
     if (!canAffordBet) return;
+    
+    // Start a new session for this single drop (1 chip)
+    startNewSession(1);
     
     if (placeBet()) {
       incrementActiveChips();
@@ -62,7 +66,7 @@ export function ControlPanel() {
         dropFn(x);
       }
     }
-  }, [canAffordBet, placeBet, incrementActiveChips]);
+  }, [canAffordBet, placeBet, incrementActiveChips, startNewSession]);
   
   const startBatch = useCallback(() => {
     if (!canAffordBatch || batchDrop.isRunning) return;

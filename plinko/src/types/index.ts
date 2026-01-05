@@ -16,6 +16,7 @@ export interface DropResult {
   payout: number;
   riskMode: RiskMode;
   rowCount: RowCount;
+  sessionId?: string; // Groups drops from the same drop session (optional for backward compatibility)
 }
 
 export interface GameSettings {

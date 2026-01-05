@@ -43,6 +43,11 @@ interface GameState {
   // Highlighted slot
   highlightedSlot: number | null;
   
+  // Current session ID (groups drops from the same drop action)
+  currentSessionId: string | null;
+  // Number of chips expected in the current session
+  sessionChipCount: number;
+  
   // Actions
   setBalance: (balance: number) => void;
   setBetAmount: (amount: number) => void;
@@ -51,6 +56,7 @@ interface GameState {
   updateSettings: (settings: Partial<GameSettings>) => void;
   
   // Game actions
+  startNewSession: () => string;
   placeBet: () => boolean;
   recordResult: (slotIndex: number) => DropResult;
   incrementActiveChips: () => void;
@@ -113,6 +119,8 @@ export const useGameStore = create<GameState>()(
       activeChips: 0,
       lastResult: null,
       highlightedSlot: null,
+      currentSessionId: null,
+      sessionChipCount: 0,
       
       // Actions
       setBalance: (balance) => set({ balance }),
@@ -138,6 +146,15 @@ export const useGameStore = create<GameState>()(
           settings: { ...state.settings, ...newSettings },
         })),
       
+      startNewSession: (chipCount: number = 1) => {
+        const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        set({ 
+          currentSessionId: sessionId,
+          sessionChipCount: chipCount,
+        });
+        return sessionId;
+      },
+      
       placeBet: () => {
         const { balance, betAmount, activeChips } = get();
         
@@ -154,9 +171,12 @@ export const useGameStore = create<GameState>()(
       },
       
       recordResult: (slotIndex) => {
-        const { betAmount, riskMode, rowCount, history, stats } = get();
+        const { betAmount, riskMode, rowCount, history, stats, currentSessionId, sessionChipCount } = get();
         
         const payout = calculatePayout(betAmount, slotIndex, riskMode, rowCount);
+        
+        // Use current session ID or generate one if missing (for backward compatibility)
+        const sessionId = currentSessionId || `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
         
         const result: DropResult = {
           id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
@@ -167,6 +187,7 @@ export const useGameStore = create<GameState>()(
           payout,
           riskMode,
           rowCount,
+          sessionId,
         };
         
         // Update slot history
@@ -178,8 +199,13 @@ export const useGameStore = create<GameState>()(
         }
         newSlotHistory[slotIndex] = (newSlotHistory[slotIndex] || 0) + 1;
         
+        const state = get();
+        
+        // Decrement session chip count
+        const remainingChips = Math.max(0, sessionChipCount - 1);
+        
         set({
-          balance: get().balance + payout,
+          balance: state.balance + payout,
           lastResult: result,
           history: [result, ...history].slice(0, MAX_HISTORY_LENGTH),
           stats: {
@@ -189,7 +215,13 @@ export const useGameStore = create<GameState>()(
             bestPayout: Math.max(stats.bestPayout, payout),
             slotHistory: newSlotHistory,
           },
+          sessionChipCount: remainingChips,
         });
+        
+        // Clear session when all chips from this session have landed
+        if (remainingChips === 0) {
+          set({ currentSessionId: null });
+        }
         
         return result;
       },
@@ -202,7 +234,8 @@ export const useGameStore = create<GameState>()(
       
       setHighlightedSlot: (slot) => set({ highlightedSlot: slot }),
       
-      startBatchDrop: (count) =>
+      startBatchDrop: (count) => {
+        const sessionId = get().startNewSession(count);
         set({
           batchDrop: {
             isRunning: true,
@@ -210,7 +243,8 @@ export const useGameStore = create<GameState>()(
             completedDrops: 0,
             results: [],
           },
-        }),
+        });
+      },
       
       updateBatchProgress: () =>
         set((state) => ({
@@ -226,6 +260,7 @@ export const useGameStore = create<GameState>()(
             ...state.batchDrop,
             isRunning: false,
           },
+          // Don't clear session here - let it clear when all chips land via recordResult
         })),
       
       addBatchResult: (result) =>

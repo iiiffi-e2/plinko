@@ -30,15 +30,22 @@ interface ChipData {
   stuckCheckTime?: number;
 }
 
-// Physics constants
+// Physics constants - tuned for more chaotic/random behavior
 const PHYSICS = {
   gravity: { x: 0, y: 1 },
-  chipRestitution: 0.5,
-  chipFriction: 0.1,
+  // Base chip physics - will be randomized per chip
+  chipRestitutionBase: 0.65,
+  chipRestitutionVariance: 0.15,
+  chipFrictionBase: 0.08,
+  chipFrictionVariance: 0.04,
   chipFrictionAir: 0.01,
-  pegRestitution: 0.8,
-  pegFriction: 0.05,
-  wallRestitution: 0.3,
+  // Peg physics - higher restitution for more bounce
+  pegRestitution: 0.85,
+  pegFriction: 0.03,
+  wallRestitution: 0.4,
+  // Collision randomization - adds chaos on peg hits
+  collisionForceMin: 0.00003,
+  collisionForceMax: 0.00012,
 };
 
 // Visual constants
@@ -248,7 +255,6 @@ export class PlinkoEngine {
     
     // Top wall/guide - helps prevent balls from getting stuck at the top
     // Positioned just above the drop zone to guide balls downward
-    const topWallY = this.chipRadius * 1.5;
     const topWall = Bodies.rectangle(
       this.width / 2,
       -wallThickness / 2,
@@ -320,13 +326,16 @@ export class PlinkoEngine {
       for (const pair of event.pairs) {
         const { bodyA, bodyB } = pair;
         
-        // Check for peg collisions
+        // Check for peg collisions and apply random force
         if (bodyA.label === "peg" || bodyB.label === "peg") {
           const chip = bodyA.label?.startsWith("chip-") ? bodyA : 
                        bodyB.label?.startsWith("chip-") ? bodyB : null;
           if (chip) {
             const chipId = chip.label!.replace("chip-", "");
             this.callbacks.onPegHit(chipId);
+            
+            // Apply random horizontal force on peg collision for more chaos
+            this.applyCollisionRandomness(chip);
           }
         }
         
@@ -353,6 +362,34 @@ export class PlinkoEngine {
         }
       }
     });
+  }
+  
+  /**
+   * Apply random horizontal force when chip hits a peg
+   * This creates more unpredictable bouncing behavior
+   */
+  private applyCollisionRandomness(chip: Matter.Body): void {
+    // Random force magnitude
+    const forceMagnitude = PHYSICS.collisionForceMin + 
+      Math.random() * (PHYSICS.collisionForceMax - PHYSICS.collisionForceMin);
+    
+    // Random direction (left or right) with slight bias based on position
+    // This helps prevent chips from always going one way
+    const centerX = this.width / 2;
+    const chipX = chip.position.x;
+    const positionBias = (centerX - chipX) / this.width * 0.3; // Slight bias toward center
+    
+    const direction = Math.random() < (0.5 + positionBias) ? 1 : -1;
+    
+    // Apply the random force
+    Body.applyForce(chip, chip.position, {
+      x: forceMagnitude * direction,
+      y: 0,
+    });
+    
+    // Also add a small random angular velocity for spin
+    const currentAngularVel = chip.angularVelocity;
+    Body.setAngularVelocity(chip, currentAngularVel + (Math.random() - 0.5) * 0.1);
   }
   
   private startRenderLoop(): void {
@@ -543,6 +580,22 @@ export class PlinkoEngine {
     });
   }
   
+  /**
+   * Generate randomized chip physics properties
+   * Each chip gets slightly different restitution and friction
+   */
+  private getRandomizedChipPhysics(): { restitution: number; friction: number } {
+    const restitution = PHYSICS.chipRestitutionBase + 
+      (Math.random() - 0.5) * 2 * PHYSICS.chipRestitutionVariance;
+    const friction = PHYSICS.chipFrictionBase + 
+      (Math.random() - 0.5) * 2 * PHYSICS.chipFrictionVariance;
+    
+    return {
+      restitution: Math.max(0.3, Math.min(0.9, restitution)),
+      friction: Math.max(0.02, Math.min(0.15, friction)),
+    };
+  }
+  
   public dropChip(
     xPosition?: number,
     simulationMode: SimulationMode = "physics",
@@ -550,9 +603,7 @@ export class PlinkoEngine {
   ): string {
     const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     
-    // Calculate drop position
-    // Ensure we have safe boundaries that account for chip radius
-    // Since chips are now smaller, we can use a smaller margin
+    // Calculate drop position with WIDER variance for more randomness
     const safeMargin = this.chipRadius + this.pegRadius + 10;
     const minX = this.boardPadding + safeMargin;
     const maxX = this.width - this.boardPadding - safeMargin;
@@ -562,25 +613,23 @@ export class PlinkoEngine {
       // Use provided position (percentage 0-1)
       dropX = minX + xPosition * (maxX - minX);
     } else {
-      // Random position near center
+      // Random position with MUCH wider variance
+      // This spreads drops across more of the board for varied outcomes
       const centerX = this.width / 2;
-      const variance = Math.min(this.pegSpacingX * 0.8, (maxX - minX) * 0.3);
-      dropX = centerX + (Math.random() - 0.5) * variance;
+      const dropRange = (maxX - minX) * 0.7; // Use 70% of available width
+      dropX = centerX + (Math.random() - 0.5) * dropRange;
     }
     
     // Clamp dropX to safe boundaries
     dropX = Math.max(minX, Math.min(maxX, dropX));
     
     // Drop position should be well above the first row of pegs
-    // First peg row starts at: this.pegSpacingY * 1.5
-    // We want to drop significantly above that to prevent getting stuck
     const firstPegY = this.pegSpacingY * 1.5;
     const dropY = Math.max(this.chipRadius * 1.5, firstPegY - this.chipRadius * 4);
     
-    // Adjust physics for deterministic mode
-    let restitution = PHYSICS.chipRestitution;
-    let friction = PHYSICS.chipFriction;
-    let frictionAir = PHYSICS.chipFrictionAir;
+    // Get randomized physics for this specific chip
+    let { restitution, friction } = this.getRandomizedChipPhysics();
+    const frictionAir = PHYSICS.chipFrictionAir;
     
     let finalTargetSlot = targetSlot;
     
@@ -607,7 +656,7 @@ export class PlinkoEngine {
       friction = 0.08 + Math.random() * 0.04;
     }
     
-    // Create chip body
+    // Create chip body with randomized physics
     const chip = Bodies.circle(dropX, dropY, this.chipRadius, {
       restitution,
       friction,
@@ -618,12 +667,19 @@ export class PlinkoEngine {
       },
     });
     
-    // Add initial velocity with stronger downward component
-    // This helps prevent balls from getting stuck at the top
+    // Add initial velocity with randomization
+    // Wider horizontal variance and varied downward speed
+    const initialVelX = (Math.random() - 0.5) * 2.0; // Increased from 0.8
+    const initialVelY = 1.5 + Math.random() * 1.5; // Varied downward velocity
+    
     Body.setVelocity(chip, {
-      x: (Math.random() - 0.5) * 0.8,
-      y: 1.0 + Math.random() * 1.0, // Stronger downward velocity to start falling immediately
+      x: initialVelX,
+      y: initialVelY,
     });
+    
+    // Add random initial angular velocity (spin)
+    const initialAngularVel = (Math.random() - 0.5) * 0.15;
+    Body.setAngularVelocity(chip, initialAngularVel);
     
     // Store chip data
     this.chips.set(id, {
